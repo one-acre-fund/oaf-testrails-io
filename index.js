@@ -1,48 +1,110 @@
 #!/usr/bin/env node
 
+//
+// TestRail Input/Output to Manual Test Files Utility
+//
+
 const program = require('commander');
 const fs = require('fs');
+const path = require('path');
 const fsUtils = require('nodejs-fs-utils');
-const git = require('simple-git')('.');
+const simpleGit = require('simple-git');
+const childProcess = require('child_process');
+const csv = require('csv');
+const moment = require('moment');
+moment.suppressDeprecationWarnings = true;
 
-function fileToTestRails(path, stats) {
+// Top-level module flags
+let flags = {
+    verbose: false
+};
+
+// Checks if the directory is a git repo
+// (Needed b/c simple-git has fatal errors when you don't check)
+function isGitRepo(dirPath) {
+    try {
+        childProcess.execSync('git rev-parse --is-inside-work-tree', {
+            cwd: dirPath,
+            stdio: ['pipe', 'pipe', 'pipe'],
+            encoding: 'utf8'
+        });
+    } catch (err) {
+        if (err.stderr && err.stderr.match(/Not a git repository/))
+            return false;
+        throw err;
+    }
+    return true;
+}
+
+// Reads a test file relative to some test directory root
+// Promises the content as well as any applicable git information in
+// a Promise
+function readTestFile(testFile, testRoot) {
 
     return new Promise((resolve, reject) => {
 
-        console.log(path);
-        console.log(stats);
+        if (flags.verbose) console.log("Reading test file at", testFile);
 
-        fs.readFile(path, 'utf8', (err,data) => {
+        fs.readFile(testFile, 'utf8', (err, content) => {
             if (err) reject(err);
-            
-            git.log(['-1', '--format="%ad"', '--', path], (err, log) => {
+
+            // Check for git info
+            let testDir = path.dirname(testFile);
+            if (!isGitRepo(testDir)) {
+                resolve([path.relative(testRoot, testFile), content, null, null]);
+                return;
+            }
+
+            // Read git info
+            let git = simpleGit(testDir);
+
+            // Latest log entry 
+            git.log([-1], (err, currLog) => {
                 if (err) reject(err);
 
-                resolve(data, log);
+                // File creation
+                git.log(['-1', '--diff-filter=A', '--follow', '--', testFile], (err, createLog) => {
+                    if (err) reject(err);
+                    if (!createLog.latest) createLog.latest = currLog.latest;
+
+                    // Last modification
+                    git.log(['-1', '--', testFile], (err, modifiedLog) => {
+                        if (err) reject(err);
+                        if (!modifiedLog.latest) modifiedLog.latest = currLog.latest;
+
+                        resolve([path.relative(testRoot, testFile),
+                            content, createLog.latest, modifiedLog.latest
+                        ]);
+                    });
+                });
             });
         });
     });
 }
 
-function dirToTestRails(testDir) {
+// Reads a directory of manual test files (.test.txt)
+// Promises the content and git information of all read test files 
+function readTestDir(testDir) {
 
     return new Promise((resolve, reject) => {
-        
-        let reads = [];
-        let trObjs = {};
 
-        fsUtils.walk(testDir, (err, path, stats, next, cache) => {
-            if (err) next();
+        let reads = [];
+        let readTestFiles = [];
+
+        fsUtils.walk(testDir, (err, testPath, stats, next, cache) => {
+            if (err) reject(err);
 
             if (!next) {
-                Promise.all(reads).then(() => resolve(trObjs));
+                Promise.all(reads).then(() => resolve(readTestFiles));
                 return;
             }
 
-            if (!stats.isDirectory()) {
+            if (!stats.isDirectory() && testPath.match(/.*\.test.txt/)) {
                 reads.push(
-                    fileToTestRails(path, stats)
-                        .then((data, log) => { trObjs[path] = log; }));
+                    readTestFile(testPath, testDir)
+                    .then((contentAndLogs) => {
+                        readTestFiles.push(contentAndLogs);
+                    }));
             }
 
             next();
@@ -50,27 +112,435 @@ function dirToTestRails(testDir) {
     });
 }
 
-function saveToFile(trObjs, outputFile) {
+//
+// TestRail-specific fields
+//
+
+let trFields = [
+    'ID',
+    'Title',
+    'Created By',
+    'Created On',
+    'Expected Result',
+    'Milestone',
+    'Priority',
+    'References',
+    'Section',
+    'Section Depth',
+    'Section Description',
+    'Section Hierarchy',
+    'Steps',
+    'Suite',
+    'Suite ID',
+    'Type',
+    'Updated By',
+    'Updated On',
+];
+
+let trDate = function(date) {
+    return moment(date).format("M/D/YYYY h:mm A");
+};
+
+let trSpecial = {
+    'Created On': (date) => {
+        return trDate(date);
+    },
+    'Updated On': (date) => {
+        return trDate(date);
+    },
+    'Section Depth': (depth) => {
+        return "" + depth;
+    },
+};
+
+let trRegexes = [];
+
+for (let i = 0; i < trFields.length; ++i) {
+    trRegexes.push(new RegExp('^\\s?' + trFields[i] + '\\s?:\\s?(.*)$', 'i'));
+}
+
+// Saves a bunch of test files to a CSV formatted for TestRail
+// Promises to return when done.
+function saveToTrCsv(readTestFiles, outputFile) {
+
+    readTestFiles.sort((a, b) => {
+        if (a[0] == b[0]) return 0;
+        return a[0] < b[0] ? -1 : 1;
+    });
+
+    let csvRows = [trFields];
+
+    for (let i = 0; i < readTestFiles.length; ++i) {
+
+        let readTestFile = readTestFiles[i];
+        let trRow = trRowFor(readTestFile);
+
+        // Convert the row objects into CSV row arrays
+        let csvRow = [];
+        for (let j = 0; j < trFields.length; ++j) {
+
+            let trField = trFields[j];
+            let value = null;
+
+            if (trField in trRow) {
+                value = trRow[trField];
+                // Some fields need magic special handling (dates, numbers)
+                if (trField in trSpecial) {
+                    value = trSpecial[trField](value);
+                }
+            }
+
+            csvRow.push(value);
+        }
+
+        csvRows.push(csvRow);
+    }
 
     return new Promise((resolve, reject) => {
 
-        console.log("Saving: ", JSON.stringify(trObjs), " to ", outputFile);
+        if (flags.verbose) console.log("Saving to", outputFile, '...');
 
-        fs.writeFile(outputFile, JSON.stringify(trObjs), err => {
+        csv.stringify(csvRows, {
+            quoted: true
+        }, (err, csvStr) => {
             if (err) reject(err);
-            else resolve();
+
+            fs.writeFile(outputFile, csvStr, (err) => {
+                if (err) reject(err);
+                resolve();
+            });
         });
     });
 }
 
-program
-    .arguments('<test-dir> <output-file>')
-    //.option('-u, --username <username>', 'The user to authenticate as')
-    //.option('-p, --password <password>', 'The user\'s password')
-    .action(function (testDir, outputFile) {
-        dirToTestRails(testDir)
-            .then(trObjs => saveToFile(trObjs, outputFile))
-            .then(() => console.log("DONE!"));
-     })
-    .parse(process.argv);
+// Reads a CSV file containing tests (usually in TestRail format)
+// Promises the row (objects) in the file
+function readTestCsv(inputFile) {
 
+    return new Promise((resolve, reject) => {
+
+        fs.readFile(inputFile, (err, data) => {
+            if (err) reject(err);
+
+            csv.parse(data, {
+                columns: true
+            }, (err, rows) => {
+                if (err) reject(err);
+
+                resolve(rows);
+            });
+        });
+    });
+}
+
+// Saves rows from a TestRail CSV file to individual test files in a directory
+// Promises to return when the test directory files are created.
+function saveToTestDir(testRows, testDir) {
+
+    let sectionDirs = {};
+
+    // Figure out all the directories we need to create first
+    for (let i = 0; i < testRows.length; ++i) {
+
+        // Create test file content for the next CSV row
+        let [testFile, testContent] = testFor(testRows[i]);
+        testFile = path.join(testDir, testFile + ".test.txt");
+
+        let sectionDir = path.dirname(testFile);
+        if (!(sectionDir in sectionDirs)) {
+
+            // Each directory gets a metadata description file, in case we
+            // ever want to load Section Descriptions back to TestRail
+            let descFile = path.join(sectionDir, 'Section.meta.txt');
+            let descContent = testRows[i]['Section Description'];
+
+            sectionDirs[sectionDir] = [
+                [descFile, descContent],
+                []
+            ];
+        }
+
+        // Sort test file content to the appropriate directory
+        sectionDirs[sectionDir][1].push([testFile, testContent]);
+    };
+
+    // Sort the directories in the order we want to create them
+    let sortedDirs = [];
+
+    for (let sectionDir in sectionDirs) {
+        sortedDirs.push([sectionDir].concat(sectionDirs[sectionDir]));
+    }
+
+    sortedDirs.sort((a, b) => {
+        return a[0] < b[0] ? -1 : 1;
+    });
+
+    // NOTE
+    // Here we're creating directories one-at-a-time, and creating all
+    // files in the directory in arbitrary order.  So we chain directory
+    // promises and concatenate the file promises underneath those.
+    let dirWrites = Promise.resolve();
+
+    for (let i = 0; i < sortedDirs.length; ++i) {
+
+        let [sectionDir, desc, tests] = sortedDirs[i];
+
+        // Chain the next directory creation
+        dirWrites = dirWrites.then(() => {
+            return new Promise((resolve, reject) => {
+
+                if (flags.verbose) console.log("Creating ", sectionDir);
+
+                fsUtils.mkdirs(sectionDir, (err) => {
+                    if (err) reject(err);
+
+                    if (flags.verbose) console.log("Created dir", sectionDir);
+
+                    let [descFile, descContent] = desc;
+
+                    fs.writeFile(descFile, descContent, (err) => {
+                        if (err) reject(err);
+
+                        if (flags.verbose) console.log("Created desc file", descFile);
+
+                        // Write all the files to the directory now
+                        let testWrites = [];
+                        for (let j = 0; j < tests.length; ++j) {
+
+                            let [testFile, testContent] = tests[j];
+
+                            if (flags.verbose) console.log("Writing file", testFile);
+
+                            testWrites.push(new Promise((resolve, reject) => {
+                                fs.writeFile(testFile, testContent, (err) => {
+                                    if (err) reject(err);
+                                    resolve();
+                                });
+                            }));
+                        }
+
+                        // Wait for the test file writes to complete, then move on
+                        Promise.all(testWrites).then(() => resolve());
+                    });
+                });
+            });
+        });
+    }
+
+    return dirWrites;
+};
+
+var titleRegex = /^([^\n]*\n)/i;
+
+// Returns a row object suitable for CSV export from a test file
+// (optionally in a git repo)
+function trRowFor([testFile, content, createLog, modifiedLog]) {
+
+    let contentFields = {};
+
+    // The format of tests is assumed to be:
+    // (case insensitive)
+    // THE TITLE
+    // SOME STEP 1
+    // SOME STEP 2
+    // EXPECTED RESULT:
+    // WHAT SHOULD HAPPEN
+    // FIELD VALUE: SOME VALUE
+    //
+    // Basically the title is the first (nonempty) line,
+    // the steps ('Steps') come next until "Expected Result:" is seen,
+    // then result ('Expected Result') lines are assumed.
+    //
+    // Arbitrary TestRail field values can also be specified
+    // using FIELD:VALUE syntax (case/space insensitive), these
+    // lines are ignored in steps and results.
+
+    let lines = content.split('\n');
+    let stepLines = [];
+    let resultLines = [];
+
+    let lineType = "step";
+
+    for (let i = 0; i < lines.length; ++i) {
+
+        let line = lines[i];
+        let prevLineType = lineType;
+
+        for (let j = 0; j < trRegexes.length; ++j) {
+
+            let match = line.match(trRegexes[j]);
+            if (match && match.length > 1) {
+
+                if (trFields[j] == 'Expected Result') {
+                    lineType = "result";
+                    line = match[1];
+                } else if (trFields[j] == 'Steps') {
+                    lineType = "step";
+                    line = match[1];
+                } else {
+                    lineType = "field";
+                    contentFields[trFields[j]] = match[1];
+                }
+
+                break;
+            }
+        }
+
+        if (lineType == "step") stepLines.push(line);
+        else if (lineType == "result") resultLines.push(line);
+        else if (lineType == "field") lineType = prevLineType;
+    }
+
+    // Title is first line of the steps
+    let title = "";
+    let steps = stepLines.join('\n').trim();
+    let results = resultLines.join('\n').trim();
+
+    let match = steps.match(titleRegex);
+    if (match && match.length > 1) {
+        title = match[1];
+        steps = steps.substring(title.length).trim();
+        title = title.trim();
+    } else {
+        title = steps.trim();
+        steps = "";
+    }
+
+    // The directory structure determines the TestRail 
+    // 'Section Hierarchy'
+
+    let trPath = testFile;
+    if (path.isAbsolute(trPath)) {
+        let parsed = path.parse(trPath);
+        trPath = trPath.substring(parsed.root.length);
+    }
+    trPath = path.dirname(trPath);
+
+    let section = path.basename(trPath);
+    let depth = 0;
+    for (var i = 0; i < trPath.length; ++i)
+        if (trPath[i] == path.sep) depth = depth + 1;
+
+    let hierarchy = trPath.split(path.sep);
+    hierarchy = hierarchy.join(' > ');
+
+    let row = {
+        'Title': title,
+        'Steps': steps,
+        'Section Hierarchy': hierarchy,
+        'Section': section,
+        'Section Depth': depth,
+        'Expected Result': results
+    };
+
+    // Add creation/update times from git if available
+    let gitInfo = {};
+    if (createLog && modifiedLog) {
+        gitInfo = {
+            'Created By': createLog.author_name + ' (' + createLog.author_email + ')',
+            'Created On': createLog.date,
+            'Updated By': modifiedLog.author_name + ' (' + modifiedLog.author_email + ')',
+            'Updated On': modifiedLog.date,
+        };
+    }
+
+    Object.assign(row, gitInfo, contentFields);
+    return row;
+}
+
+// Fields that we add from imported TestRail CSV rows to
+// imported .test.txt files - these fields can then be
+// re-exported to TestRail.
+// NOTE that we don't save 'Updated' information - this
+// is better pulled from git.
+let persistedTrFields = [
+    'ID',
+    'Created By',
+    'Created On',
+    'Milestone',
+    'Priority',
+    'References',
+    'Suite',
+    'Suite ID',
+    'Type'
+];
+
+// Translate a TestRail 'Section Hierarchy' into a path that's valid on
+// multiple OSes - kill weird characters, etc.
+function safePath(sectionPath, title) {
+
+    sectionPath = sectionPath.replace(/[\\\/]/g, '_').replace(/ > /g, path.sep);
+    title = title.replace(/[\\\/]/g, '_').substring(0, 200);
+
+    fullPath = path.join(sectionPath, title);
+    return fullPath.replace(/[^A-Za-z0-9\\\/]/g, '_');
+}
+
+// Creates test file content given a TestRail CSV row object -
+// see trRowFor() for output format.
+function testFor(trRow) {
+
+    let sectionPath = trRow['Section Hierarchy'];
+    let title = trRow['Title'];
+    let testFile = safePath(sectionPath, title);
+
+    let steps = trRow['Steps'];
+
+    let results = trRow['Expected Result'];
+
+    let content = title + "\n\n" + steps + "\n\n" +
+        (results ? "Expected Result:\n" + results + "\n\n" : "");
+
+    // Append any extra persisted TestRail data as fields in the
+    // test file
+    let fieldContent = [];
+    for (let i = 0; i < persistedTrFields.length; ++i) {
+
+        let trField = persistedTrFields[i];
+        if (trRow[trField] == null) continue;
+
+        fieldContent.push(trField + ": " + trRow[trField]);
+    }
+
+    content = content + fieldContent.join('\n');
+
+    return [testFile, content];
+}
+
+if (!module.parent) {
+
+    flags.verbose = true;
+
+    // CLI entry point, when executed directly
+    program
+        .arguments('<test-dir> <output-file>')
+        .option('--import', 'Import tests from .csv, not export to .csv')
+        .action(function(testDir, outputFile) {
+            if (program.import) {
+                readTestCsv(outputFile)
+                    .then(testRows => saveToTestDir(testRows, testDir))
+                    .then(() => console.log("Done importing to", testDir));
+            } else {
+                readTestDir(testDir)
+                    .then(readTestFiles => saveToTrCsv(readTestFiles, outputFile))
+                    .then(() => console.log("Done exporting to", outputFile));
+            }
+        })
+        .parse(process.argv);
+
+} else {
+
+    // require() entry point, use as module
+    module.exports = flags;
+    Object.assign(module.exports, {
+        isGitRepo: isGitRepo,
+        readTestDir: readTestDir,
+        readTestFile: readTestFile,
+        readTestCsv: readTestCsv,
+        saveToTrCsv: saveToTrCsv,
+        saveToTestDir: saveToTestDir,
+        trRowFor: trRowFor,
+        testFor: testFor
+    });
+
+}
