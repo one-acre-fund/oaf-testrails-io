@@ -484,9 +484,12 @@ function testFor(trRow) {
     let title = trRow['Title'];
     let testFile = safePath(sectionPath, title);
 
+    // These fields are kind of HTML-ish - double whitespace isn't rendered.
+    // Our text files *do* care about this.
     let steps = trRow['Steps'];
-
+    if (steps) steps = steps.replace(/[ \t]+/g, ' ');
     let results = trRow['Expected Result'];
+    if (results) results = results.replace(/[ \t]+/g, ' ');
 
     let content = title + "\n\n" + steps + "\n\n" +
         (results ? "Expected Result:\n" + results + "\n\n" : "");
@@ -515,15 +518,24 @@ if (!module.parent) {
     program
         .arguments('<test-dir> <output-file>')
         .option('--import', 'Import tests from .csv, not export to .csv')
+        .option('--quiet', 'Suppress output except errors')
         .action(function(testDir, outputFile) {
+
+            if (program.quiet)
+                flags.verbose = false;
+
             if (program.import) {
                 readTestCsv(outputFile)
                     .then(testRows => saveToTestDir(testRows, testDir))
-                    .then(() => console.log("Done importing to", testDir));
+                    .then(() => {
+                        if (flags.verbose) console.log("Done importing to", testDir);
+                    });
             } else {
                 readTestDir(testDir)
                     .then(readTestFiles => saveToTrCsv(readTestFiles, outputFile))
-                    .then(() => console.log("Done exporting to", outputFile));
+                    .then(() => {
+                        if (flags.verbose) console.log("Done exporting to", outputFile);
+                    });
             }
         })
         .parse(process.argv);
