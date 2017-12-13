@@ -82,6 +82,9 @@ function readTestFile(testFile, testRoot) {
     });
 }
 
+let testFileSuffix = ".test.txt";
+let testFileSuffixRegex = /\.test\.txt$/;
+
 // Reads a directory of manual test files (.test.txt)
 // Promises the content and git information of all read test files 
 function readTestDir(testDir) {
@@ -99,7 +102,7 @@ function readTestDir(testDir) {
                 return;
             }
 
-            if (!stats.isDirectory() && testPath.match(/.*\.test.txt/)) {
+            if (!stats.isDirectory() && testPath.match(testFileSuffixRegex)) {
                 reads.push(
                     readTestFile(testPath, testDir)
                     .then((contentAndLogs) => {
@@ -161,7 +164,7 @@ for (let i = 0; i < trFields.length; ++i) {
 
 // Saves a bunch of test files to a CSV formatted for TestRail
 // Promises to return when done.
-function saveToTrCsv(readTestFiles, outputFile) {
+function saveToTrCsv(readTestFiles, outputFile, addGitFooter) {
 
     readTestFiles.sort((a, b) => {
         if (a[0] == b[0]) return 0;
@@ -173,7 +176,7 @@ function saveToTrCsv(readTestFiles, outputFile) {
     for (let i = 0; i < readTestFiles.length; ++i) {
 
         let readTestFile = readTestFiles[i];
-        let trRow = trRowFor(readTestFile);
+        let trRow = trRowFor(readTestFile, addGitFooter);
 
         // Convert the row objects into CSV row arrays
         let csvRow = [];
@@ -244,7 +247,7 @@ function saveToTestDir(testRows, testDir) {
 
         // Create test file content for the next CSV row
         let [testFile, testContent] = testFor(testRows[i]);
-        testFile = path.join(testDir, testFile + ".test.txt");
+        testFile = path.join(testDir, testFile);
 
         let sectionDir = path.dirname(testFile);
         if (!(sectionDir in sectionDirs)) {
@@ -330,17 +333,17 @@ function saveToTestDir(testRows, testDir) {
     return dirWrites;
 };
 
-var titleRegex = /^([^\n]*\n)/i;
-
 // Returns a row object suitable for CSV export from a test file
 // (optionally in a git repo)
-function trRowFor([testFile, content, createLog, modifiedLog]) {
+function trRowFor([testFile, content, createLog, modifiedLog], addGitFooter) {
+
+    let title = path.basename(testFile).replace(testFileSuffixRegex, "");
 
     let contentFields = {};
 
     // The format of tests is assumed to be:
     // (case insensitive)
-    // THE TITLE
+    // > cat THE_TITLE.test.txt
     // SOME STEP 1
     // SOME STEP 2
     // EXPECTED RESULT:
@@ -392,44 +395,22 @@ function trRowFor([testFile, content, createLog, modifiedLog]) {
     }
 
     // Title is first line of the steps
-    let title = "";
     let steps = stepLines.join('\n').trim();
     let results = resultLines.join('\n').trim();
 
-    let match = steps.match(titleRegex);
-    if (match && match.length > 1) {
-        title = match[1];
-        steps = steps.substring(title.length).trim();
-        title = title.trim();
-    } else {
-        title = steps.trim();
-        steps = "";
-    }
-
     // The directory structure determines the TestRail 
     // 'Section Hierarchy'
+    let hierarchy = pathToTrSection(testFile);
 
-    let trPath = testFile;
-    if (path.isAbsolute(trPath)) {
-        let parsed = path.parse(trPath);
-        trPath = trPath.substring(parsed.root.length);
+    if (createLog && modifiedLog && addGitFooter) {
+        steps = steps + '\n\nLatest Update:\n' + 
+            JSON.stringify(Object.assign({}, modifiedLog), null, 2);
     }
-    trPath = path.dirname(trPath);
-
-    let section = path.basename(trPath);
-    let depth = 0;
-    for (var i = 0; i < trPath.length; ++i)
-        if (trPath[i] == path.sep) depth = depth + 1;
-
-    let hierarchy = trPath.split(path.sep);
-    hierarchy = hierarchy.join(' > ');
 
     let row = {
         'Title': title,
         'Steps': steps,
-        'Section Hierarchy': hierarchy,
-        'Section': section,
-        'Section Depth': depth,
+        'Section': hierarchy,
         'Expected Result': results
     };
 
@@ -446,6 +427,25 @@ function trRowFor([testFile, content, createLog, modifiedLog]) {
 
     Object.assign(row, gitInfo, contentFields);
     return row;
+}
+
+// TestRails allows nested Section specification on import by using
+// " > "  as a separator
+function pathToTrSection(testFile) {
+    
+    let trPath = testFile;
+    if (path.isAbsolute(trPath)) {
+        let parsed = path.parse(trPath);
+        trPath = trPath.substring(parsed.root.length);
+    }
+    trPath = path.dirname(trPath);
+
+    if (trPath == '.') return "";
+
+    let hierarchy = trPath.split(path.sep);
+    hierarchy = hierarchy.join(' > ');
+
+    return hierarchy;
 }
 
 // Fields that we add from imported TestRail CSV rows to
@@ -480,9 +480,13 @@ function safePath(sectionPath, title) {
 // see trRowFor() for output format.
 function testFor(trRow) {
 
-    let sectionPath = trRow['Section Hierarchy'];
+    let sectionPath = 
+        ('Section Hierarchy' in trRow && trRow['Section Hierarchy']) ? 
+            trRow['Section Hierarchy'] : 
+            trRow['Section'];
+
     let title = trRow['Title'];
-    let testFile = safePath(sectionPath, title);
+    let testFile = safePath(sectionPath, title) + testFileSuffix;
 
     // These fields are kind of HTML-ish - double whitespace isn't rendered.
     // Our text files *do* care about this.
@@ -491,7 +495,7 @@ function testFor(trRow) {
     let results = trRow['Expected Result'];
     if (results) results = results.replace(/[ \t]+/g, ' ');
 
-    let content = title + "\n\n" + steps + "\n\n" +
+    let content = steps + "\n\n" +
         (results ? "Expected Result:\n" + results + "\n\n" : "");
 
     // Append any extra persisted TestRail data as fields in the
@@ -518,6 +522,7 @@ if (!module.parent) {
     program
         .arguments('<test-dir> <output-file>')
         .option('--import', 'Import tests from .csv, not export to .csv')
+        .option('--add-git-footer', 'Add human-readable git information as a footer to the exported test steps')
         .option('--quiet', 'Suppress output except errors')
         .action(function(testDir, outputFile) {
 
@@ -532,7 +537,7 @@ if (!module.parent) {
                     });
             } else {
                 readTestDir(testDir)
-                    .then(readTestFiles => saveToTrCsv(readTestFiles, outputFile))
+                    .then(readTestFiles => saveToTrCsv(readTestFiles, outputFile, program.addGitFooter))
                     .then(() => {
                         if (flags.verbose) console.log("Done exporting to", outputFile);
                     });

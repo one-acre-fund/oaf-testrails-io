@@ -41,13 +41,36 @@ describe('Read Test File', () => {
                 let row = trio.trRowFor(readTestFile);
                 assert.equal(row['ID'], "ID");
                 assert.equal(row['Priority'], "priority");
-                assert.equal(row['Title'], "TITLE");
+                assert.equal(row['Title'], "basic");
                 assert.equal(row['Steps'], "STEPS");
                 assert.equal(row['Expected Result'], "RESULT\n\nRESULT");
+                assert.equal(row['Section'], "samples > section");
+            });
+    });
 
-                assert.equal(row['Section'], "section");
-                assert.equal(row['Section Depth'], 1);
-                assert.equal(row['Section Hierarchy'], "samples > section");
+    it('should load correct empty section', () => {
+
+        return trio
+            // Read sample test
+            .readTestFile(path.join(sampleDir, 'section', 'basic.test.txt'), path.join(sampleDir, 'section'))
+            // Make sure a sane row is created
+            .then(readTestFile => {
+
+                let row = trio.trRowFor(readTestFile);
+                assert.equal(row['Section'], "");
+            });
+    });
+
+    it('should append git footer if required', () => {
+
+        return trio
+            // Read sample test
+            .readTestFile(path.join(sampleDir, 'section', 'basic.test.txt'), sampleDir)
+            // Make sure a sane row is created
+            .then(readTestFile => {
+
+                let row = trio.trRowFor(readTestFile, true);
+                assert(row['Steps'].match(/^STEPS\n\n.+/));
             });
     });
 
@@ -87,7 +110,7 @@ describe('Read Test File', () => {
                     if (row['ID'] != 'ID') continue;
 
                     foundSample = true;
-                    assert.equal(row['Title'], "TITLE");
+                    assert.equal(row['Title'], "basic");
                     assert.equal(row['Section'], "section");
                 }
 
@@ -110,18 +133,16 @@ describe('Read Test File', () => {
             // Write new sample test files
             .then(testRows => trio.saveToTestDir(testRows, outputDir))
             // Read new sample test file
-            .then(() => trio.readTestFile(path.join(outputDir, 'section', 'TITLE.test.txt'), outputDir))
+            .then(() => trio.readTestFile(path.join(outputDir, 'section', 'basic.test.txt'), outputDir))
             // Make sure it's the same as the original sample file data
             .then(readTestFile => {
 
                 let row = trio.trRowFor(readTestFile);
                 assert.equal(row['ID'], "ID");
-                assert.equal(row['Title'], "TITLE");
+                assert.equal(row['Title'], "basic");
                 assert.equal(row['Steps'], "STEPS");
                 assert.equal(row['Expected Result'], "RESULT\n\nRESULT");
-
                 assert.equal(row['Section'], "section");
-                assert.equal(row['Section Hierarchy'], "section");
             });
     });
 
