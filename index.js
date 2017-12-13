@@ -523,6 +523,7 @@ if (!module.parent) {
         .arguments('<test-dir> <output-file>')
         .option('--import', 'Import tests from .csv, not export to .csv')
         .option('--add-git-footer', 'Add human-readable git information as a footer to the exported test steps')
+        .option('--copy-testrail-config', 'Copies the TestRail config file alongside the exported .csv')
         .option('--quiet', 'Suppress output except errors')
         .action(function(testDir, outputFile) {
 
@@ -540,6 +541,15 @@ if (!module.parent) {
                     .then(readTestFiles => saveToTrCsv(readTestFiles, outputFile, program.addGitFooter))
                     .then(() => {
                         if (flags.verbose) console.log("Done exporting to", outputFile);
+                        if (program.copyTestrailConfig) {
+                            
+                            let configFile = path.join(__dirname, "import-configs/testrail-import-test-case-2017-12-13.cfg");
+                            fs.writeFileSync(path.join(path.dirname(outputFile),
+                                                       path.basename(configFile)), 
+                                             fs.readFileSync(configFile));
+
+                            if (flags.verbose) console.log("Done copying", configFile);
+                        }
                     });
             }
         })
