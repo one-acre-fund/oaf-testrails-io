@@ -16,7 +16,8 @@ moment.suppressDeprecationWarnings = true;
 
 // Top-level module flags
 let flags = {
-    verbose: false
+    verbose: false,
+    testFileSuffix: ".txt"
 };
 
 // Checks if the directory is a git repo
@@ -82,9 +83,6 @@ function readTestFile(testFile, testRoot) {
     });
 }
 
-let testFileSuffix = ".test.txt";
-let testFileSuffixRegex = /\.test\.txt$/;
-
 // Reads a directory of manual test files (.test.txt)
 // Promises the content and git information of all read test files 
 function readTestDir(testDir) {
@@ -102,7 +100,7 @@ function readTestDir(testDir) {
                 return;
             }
 
-            if (!stats.isDirectory() && testPath.match(testFileSuffixRegex)) {
+            if (!stats.isDirectory() && testPath.endsWith(flags.testFileSuffix)) {
                 reads.push(
                     readTestFile(testPath, testDir)
                     .then((contentAndLogs) => {
@@ -337,7 +335,8 @@ function saveToTestDir(testRows, testDir) {
 // (optionally in a git repo)
 function trRowFor([testFile, content, createLog, modifiedLog], addGitFooter) {
 
-    let title = path.basename(testFile).replace(testFileSuffixRegex, "");
+    let title = path.basename(testFile);
+    title = title.substring(0, title.length - flags.testFileSuffix.length);
 
     let contentFields = {};
 
@@ -403,7 +402,7 @@ function trRowFor([testFile, content, createLog, modifiedLog], addGitFooter) {
     let hierarchy = pathToTrSection(testFile);
 
     if (createLog && modifiedLog && addGitFooter) {
-        steps = steps + '\n\nLatest Update:\n' + 
+        steps = steps + '\n\nLatest Update:\n' +
             JSON.stringify(Object.assign({}, modifiedLog), null, 2);
     }
 
@@ -432,7 +431,7 @@ function trRowFor([testFile, content, createLog, modifiedLog], addGitFooter) {
 // TestRails allows nested Section specification on import by using
 // " > "  as a separator
 function pathToTrSection(testFile) {
-    
+
     let trPath = testFile;
     if (path.isAbsolute(trPath)) {
         let parsed = path.parse(trPath);
@@ -480,13 +479,13 @@ function safePath(sectionPath, title) {
 // see trRowFor() for output format.
 function testFor(trRow) {
 
-    let sectionPath = 
-        ('Section Hierarchy' in trRow && trRow['Section Hierarchy']) ? 
-            trRow['Section Hierarchy'] : 
-            trRow['Section'];
+    let sectionPath =
+        ('Section Hierarchy' in trRow && trRow['Section Hierarchy']) ?
+        trRow['Section Hierarchy'] :
+        trRow['Section'];
 
     let title = trRow['Title'];
-    let testFile = safePath(sectionPath, title) + testFileSuffix;
+    let testFile = safePath(sectionPath, title) + flags.testFileSuffix;
 
     // These fields are kind of HTML-ish - double whitespace isn't rendered.
     // Our text files *do* care about this.
@@ -524,11 +523,15 @@ if (!module.parent) {
         .option('--import', 'Import tests from .csv, not export to .csv')
         .option('--add-git-footer', 'Add human-readable git information as a footer to the exported test steps')
         .option('--copy-testrail-config', 'Copies the TestRail config file alongside the exported .csv')
+        .option('--test-extension [ext]', 'Test file extension to search for')
         .option('--quiet', 'Suppress output except errors')
         .action(function(testDir, outputFile) {
 
             if (program.quiet)
                 flags.verbose = false;
+
+            if (program.testExtension)
+                flags.testFileSuffix = program.testExtension;
 
             if (program.import) {
                 readTestCsv(outputFile)
@@ -542,11 +545,11 @@ if (!module.parent) {
                     .then(() => {
                         if (flags.verbose) console.log("Done exporting to", outputFile);
                         if (program.copyTestrailConfig) {
-                            
+
                             let configFile = path.join(__dirname, "import-configs/testrail-import-test-case-2017-12-13.cfg");
                             fs.writeFileSync(path.join(path.dirname(outputFile),
-                                                       path.basename(configFile)), 
-                                             fs.readFileSync(configFile));
+                                    path.basename(configFile)),
+                                fs.readFileSync(configFile));
 
                             if (flags.verbose) console.log("Done copying", configFile);
                         }

@@ -16,6 +16,10 @@ let sampleDir = path.join(testDir, 'samples');
 let tmpDirObj = tmp.dirSync();
 let tmpDir = tmpDirObj.name;
 
+// Use .test.txt as an extension
+// TODO: Make this an explicit test?
+trio.testFileSuffix = ".test.txt";
+
 describe('Read Test File', () => {
 
     it('should read content and git log info', () => {
