@@ -319,6 +319,7 @@ function saveToTestDir(testRows, testDir) {
 
                                     let testFileDir = path.dirname(testFile);
                                     let testFileExt = path.extname(testFile);
+                                    let testFileBasename = path.basename(testFile, testFileExt);
                                     let testFileSuffix = 0;
                                     let numFilenameChars = flags.maxFilenameLength -
                                         (path.resolve(testFileDir).length + 1 + ("" + testFileSuffix).length + testFileExt.length);
@@ -332,7 +333,7 @@ function saveToTestDir(testRows, testDir) {
 
 
                                         testFile = path.join(testFileDir,
-                                            testFile.substring(0, numFilenameChars) + testFileSuffix + testFileExt);
+                                            testFileBasename.substring(0, numFilenameChars) + testFileSuffix + testFileExt);
                                         if (!fs.existsSync(testFile)) {
 
                                             if (flags.verbose) console.log("\nFilename", testFile, "truncated.");
