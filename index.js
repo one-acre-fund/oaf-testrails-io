@@ -17,7 +17,8 @@ moment.suppressDeprecationWarnings = true;
 // Top-level module flags
 let flags = {
     verbose: false,
-    testFileSuffix: ".txt"
+    testFileSuffix: ".txt",
+    maxFilenameLength: null,
 };
 
 // Checks if the directory is a git repo
@@ -310,6 +311,50 @@ function saveToTestDir(testRows, testDir) {
 
                             let [testFile, testContent] = tests[j];
 
+
+                            if (flags.maxFilenameLength != null) {
+
+                                let filenameLength = path.resolve(testFile).length;
+                                if (filenameLength > flags.maxFilenameLength) {
+
+                                    let testFileDir = path.dirname(testFile);
+                                    let testFileExt = path.extname(testFile);
+                                    let testFileSuffix = 0;
+                                    let numFilenameChars = flags.maxFilenameLength -
+                                        (path.resolve(testFileDir).length + 1 + ("" + testFileSuffix).length + testFileExt.length);
+
+                                    while (true) {
+
+                                        if (numFilenameChars <= 0) {
+                                            reject("Filename " + path.resolve(testFile) + " too long.");
+                                            return;
+                                        }
+
+
+                                        testFile = path.join(testFileDir,
+                                            testFile.substring(0, numFilenameChars) + testFileSuffix + testFileExt);
+                                        if (!fs.existsSync(testFile)) {
+
+                                            if (flags.verbose) console.log("\nFilename", testFile, "truncated.");
+
+                                            // Sanity check, should always succeed
+                                            if (path.resolve(testFile).length > flags.maxFilenameLength) {
+                                                reject("Bad filename created: " + path.resolve(testFile));
+                                                return;
+                                            }
+
+                                            break;
+                                        }
+
+                                        let nextSuffix = suffix + 1;
+                                        numFilenameChars = numFilenameChars -
+                                            (("" + nextSuffix).length - ("" + testFileSuffix).length);
+
+                                        testFileSuffix = nextSuffix;
+                                    }
+                                }
+                            }
+
                             if (flags.verbose) console.log("Writing file", testFile);
 
                             testWrites.push(new Promise((resolve, reject) => {
@@ -524,6 +569,7 @@ if (!module.parent) {
         .option('--add-git-footer', 'Add human-readable git information as a footer to the exported test steps')
         .option('--copy-testrail-config', 'Copies the TestRail config file alongside the exported .csv')
         .option('--test-extension [ext]', 'Test file extension to search for')
+        .option('--short-filenames-for-win', 'Truncate filenames at 256 chars b/c windows is dumb')
         .option('--quiet', 'Suppress output except errors')
         .action(function(testDir, outputFile) {
 
@@ -532,6 +578,9 @@ if (!module.parent) {
 
             if (program.testExtension)
                 flags.testFileSuffix = program.testExtension;
+
+            if (program.shortFilenamesForWin)
+                flags.maxFilenameLength = 256
 
             if (program.import) {
                 readTestCsv(outputFile)
