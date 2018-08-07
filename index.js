@@ -31,7 +31,7 @@ function isGitRepo(dirPath) {
             encoding: 'utf8'
         });
     } catch (err) {
-        if (err.stderr && err.stderr.match(/Not a git repository/))
+        if (err.stderr && err.stderr.match(/Not a git repository/i))
             return false;
         throw err;
     }
@@ -58,8 +58,7 @@ function readTestFile(testFile, testRoot) {
             }
 
             // Read git info
-            let git = simpleGit(testDir);
-            git.cwd(process.cwd());
+            let git = simpleGit(testDir).cwd(process.cwd());
 
             // Latest log entry 
             git.log([-1], (err, currLog) => {
@@ -404,7 +403,7 @@ function trRowFor([testFile, content, createLog, modifiedLog], addGitFooter) {
     // using FIELD:VALUE syntax (case/space insensitive), these
     // lines are ignored in steps and results.
 
-    let lines = content.split('\n');
+    let lines = content.replace(/\r/g, '').split('\n');
     let stepLines = [];
     let resultLines = [];
 
