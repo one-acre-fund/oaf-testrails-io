@@ -59,6 +59,7 @@ function readTestFile(testFile, testRoot) {
 
             // Read git info
             let git = simpleGit(testDir);
+            git.cwd(process.cwd());
 
             // Latest log entry 
             git.log([-1], (err, currLog) => {
