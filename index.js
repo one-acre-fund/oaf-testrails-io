@@ -140,7 +140,12 @@ let trFields = [
 ];
 
 let trDate = function(date) {
-    return moment(date).format("M/D/YYYY h:mm A");
+    var parsed = moment(date);
+    if (!parsed.isValid()) {
+        // Already-parsed round-trip date
+        parsed = moment(date, "M/D/YYYY h:mm A");
+    }
+    return parsed.format("M/D/YYYY h:mm A");
 };
 
 let trSpecial = {
