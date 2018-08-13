@@ -470,7 +470,7 @@ function trRowFor([testFile, content, createLog, modifiedLog], addGitFooter) {
         };
     }
 
-    Object.assign(row, gitInfo, contentFields);
+    Object.assign(row, contentFields, gitInfo);
     return row;
 }
 
