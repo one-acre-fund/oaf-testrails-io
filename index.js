@@ -352,7 +352,7 @@ function saveToTestDir(testRows, testDir) {
                                             break;
                                         }
 
-                                        let nextSuffix = suffix + 1;
+                                        let nextSuffix = testFileSuffix + 1;
                                         numFilenameChars = numFilenameChars -
                                             (("" + nextSuffix).length - ("" + testFileSuffix).length);
 
